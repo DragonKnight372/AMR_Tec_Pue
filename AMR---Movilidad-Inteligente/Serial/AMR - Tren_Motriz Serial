@@ -1,0 +1,143 @@
+/*
+Codigo Tren Motriz
+YRA - Machinime
+50 PWM detenido
++50 PWM va hacia delante
+-50 PWM va hacia atras
+El codigo maneja el coche de 0 a 70 PWM
+se activa entre 80 a 82 pwm el min de velocidad
+falta probar en reversa el min de pwm
+AL PARECER LA LLANTA IZQUIERDA NO GIRA CORRECTAMENTE
+EN REVERSA HAY QUE REVISAR
+*/
+
+#include <Arduino.h>
+
+// Definición de pines
+const int pwmPin = 12;          // Pin para PWM
+const int relayPin = 17;        // Pin para relé
+const int dirPin = 25;          // Pin para reversa (activa hacia atrás)
+const int spl1Pin = 32;         // Pin SPL1 (siempre en 1)
+const int spl2Pin = 33;         // Pin SPL2 (siempre en 0)
+
+// Variables de control
+int velocidad = 50;             // Velocidad inicial (50% de avance o reversa)
+int pwmValue = 0;               // Valor actual de PWM
+const int rampDelay = 10;       // Tiempo de espera para el aumento de PWM (ms)
+unsigned long lastPWMTime = 0;  // Para controlar el tiempo de envío del PWM
+const unsigned long pwmInterval = 250; // Intervalo de 0.25 segundos
+bool relayState = false;        // Estado del relé (false = apagado, true = encendido)
+
+// Configuración de PWM
+const int freq = 1000;          // Frecuencia PWM ajustada a 1 kHz (1000 Hz)
+const int pwmChannel = 0;       // Canal PWM
+const int resolution = 8;       // Resolución (8 bits -> valores de 0 a 255)
+
+// Rango de PWM entre 30% y 70% (30% = 76, 70% = 178)
+const int pwmMin = 0;          // 30% de 255
+const int pwmMax = 180;         // 70% de 255
+
+// Función para actualizar la velocidad
+void actualizar(String s) {
+  s.trim();
+  s.replace(" ", "_");  // por si el usuario pone espacio
+
+  int sep = s.indexOf('_');
+  if (sep == -1) {
+    Serial.println("Error: formato incorrecto. Usa HEX1_DEC2 (ej: 200_85)");
+    return;
+  }
+
+  String dato1 = s.substring(0, sep);     // hexadecimal (no usado)
+  String dato2 = s.substring(sep + 1);    // decimal (0–100)
+
+  int nuevoObjetivo = dato2.toInt();      // se interpreta como decimal
+  nuevoObjetivo = constrain(nuevoObjetivo, 0, 100);
+  velocidad = nuevoObjetivo;
+
+  Serial.print("Nuevo objetivo establecido a: ");
+  Serial.print(velocidad);
+  Serial.println("%");
+}
+
+void setup() {
+  // Inicialización de pines
+  pinMode(pwmPin, OUTPUT);      // Configura el pin de PWM como salida
+  pinMode(relayPin, OUTPUT);    // Configura el pin de relé como salida
+  pinMode(dirPin, OUTPUT);      // Configura el pin de reversa como salida
+  pinMode(spl1Pin, OUTPUT);     // Configura el pin SPL1 como salida
+  pinMode(spl2Pin, OUTPUT);     // Configura el pin SPL2 como salida
+
+  // Configuración de PWM en el pin
+  ledcSetup(pwmChannel, freq, resolution);
+  ledcAttachPin(pwmPin, pwmChannel);
+
+  // Inicializar SPL1 y SPL2 en valores constantes (1, 0)
+  digitalWrite(spl1Pin, HIGH);  // Mantener SPL1 en 1
+  digitalWrite(spl2Pin, LOW);   // Mantener SPL2 en 0
+
+  // Inicializar el relé apagado
+  digitalWrite(relayPin, LOW);
+
+  // Iniciar comunicación serial
+  Serial.begin(9600);
+}
+
+void loop() {
+  // Leer los datos del serial
+  if (Serial.available()) {
+    String comando = Serial.readString();
+    if (comando.startsWith("r")) {
+      // Alternar el estado del relé
+      relayState = !relayState;
+      digitalWrite(relayPin, relayState ? HIGH : LOW);
+      Serial.print("Relé ");
+      Serial.println(relayState ? "activado" : "desactivado");
+    } else {
+      // Llamar a la función de actualizar velocidad
+      actualizar(comando);
+    }
+  }
+
+  // Control de dirección y velocidad basado en la variable 'velocidad'
+  if (velocidad == 50) {
+    // Si la velocidad es 50%, mantener la dirección actual sin invertirla
+    rampaPWM(pwmMin);            // Apagar PWM gradualmente
+  } else if (velocidad > 50) {
+    // Movimiento hacia adelante (dirPin en HIGH)
+    digitalWrite(dirPin, HIGH);   // Dirección hacia adelante
+    rampaPWM(map(velocidad, 51, 100, pwmMin, pwmMax));  // PWM de 30% a 70%
+  } else if (velocidad < 50) {
+    // Movimiento hacia atrás (dirPin en LOW)
+    digitalWrite(dirPin, LOW);    // Dirección hacia atrás
+    rampaPWM(map(velocidad, 0, 49, pwmMax, pwmMin));  // PWM de 30% a 70% para reversa
+  }
+
+  // Enviar el valor de PWM cada 0.25 segundos
+  if (millis() - lastPWMTime >= pwmInterval) {
+    Serial.print("PWM actual: ");
+    Serial.println(pwmValue);
+    lastPWMTime = millis();
+  }
+
+  delay(100);  // Pausa para estabilizar el ciclo
+}
+
+// Función para realizar una rampa en el valor del PWM
+void rampaPWM(int objetivo) {
+  if (pwmValue < objetivo) {
+    // Aumentar el PWM gradualmente
+    while (pwmValue < objetivo) {
+      pwmValue++;
+      ledcWrite(pwmChannel, pwmValue);
+      delay(rampDelay);  // Controla la velocidad de la rampa
+    }
+  } else if (pwmValue > objetivo) {
+    // Disminuir el PWM gradualmente
+    while (pwmValue > objetivo) {
+      pwmValue--;
+      ledcWrite(pwmChannel, pwmValue);
+      delay(rampDelay);  // Controla la velocidad de la rampa
+    }
+  }
+}

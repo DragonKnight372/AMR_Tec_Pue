@@ -1,0 +1,112 @@
+#include <SPI.h>
+#include <mcp_can.h>
+
+#define CAN_CS    10
+#define CAN_SPEED CAN_500KBPS
+#define CAN_CLOCK MCP_8MHZ
+#define FILTRO_ID 0x100  
+
+#define PIN_PWM 9
+#define PIN_DIR 7
+#define PIN_FEEDBACK A7 
+
+MCP_CAN CAN0(CAN_CS);
+
+const int RAW_MIN = 432; 
+const int RAW_MAX = 847; 
+
+byte posicionObjetivo;
+const int TOLERANCIA = 1; 
+
+const int N = 6;   	
+int bufferLecturas[N];
+long sumaLecturas = 0;
+int indice = 0;
+bool bufferLleno = false;
+
+int leerPotFiltrado() {
+  int nueva = analogRead(PIN_FEEDBACK);
+
+  sumaLecturas -= bufferLecturas[indice];
+  bufferLecturas[indice] = nueva;
+  sumaLecturas += nueva;
+  indice++;
+  if (indice >= N) { indice = 0; bufferLleno = true; }
+
+  return bufferLleno ? (sumaLecturas / N) : (sumaLecturas / indice);
+}
+
+byte lecturaToPorcentaje(int lecturaRaw) {
+  lecturaRaw = constrain(lecturaRaw, RAW_MIN, RAW_MAX);
+  int porcentaje = map(lecturaRaw, RAW_MIN, RAW_MAX, 0, 100);
+  return (byte)constrain(porcentaje, 0, 100);
+}
+
+void enviarFeedbackCAN() {
+  int lecturaPot = leerPotFiltrado();
+  byte posicionActual = lecturaToPorcentaje(lecturaPot);
+
+  byte data[1];
+  data[0] = posicionActual;
+
+  byte sndStat = CAN0.sendMsgBuf(0x201, 0, 1, data);
+}
+
+void moverActuadorHaciaObjetivo() {
+  byte posicionActual = lecturaToPorcentaje(leerPotFiltrado());
+  int error = posicionObjetivo - posicionActual;
+
+  if (abs(error) <= TOLERANCIA) {
+    analogWrite(PIN_PWM, 0);
+    return;
+  }
+
+  digitalWrite(PIN_DIR, error > 0 ? LOW : HIGH);
+  byte pwmValor = map(abs(error), 0, 100, 135, 195);
+  pwmValor = constrain(pwmValor, 0, 255);
+  analogWrite(PIN_PWM, pwmValor);
+}
+-
+void setup() {
+
+  if (CAN0.begin(MCP_ANY, CAN_SPEED, CAN_CLOCK) == CAN_OK) {
+  } else {
+    while (1);
+  }
+
+  CAN0.init_Mask(0, 0, 0x7FF);
+  CAN0.init_Filt(0, 0, FILTRO_ID);
+  for (int i = 1; i < 6; i++) CAN0.init_Filt(i, 0, FILTRO_ID);
+  CAN0.setMode(MCP_NORMAL);
+
+  pinMode(PIN_PWM, OUTPUT);
+  pinMode(PIN_DIR, OUTPUT);
+  analogWrite(PIN_PWM, 0);
+  digitalWrite(PIN_DIR, LOW);
+
+  for (int i = 0; i < N; i++) {
+    bufferLecturas[i] = analogRead(PIN_FEEDBACK);
+    sumaLecturas += bufferLecturas[i];
+  }
+  bufferLleno = true;
+
+  byte posicionInicial = lecturaToPorcentaje(leerPotFiltrado());
+  posicionObjetivo = posicionInicial;
+
+  enviarFeedbackCAN();
+}
+
+void loop() {
+  if (CAN0.checkReceive() == CAN_MSGAVAIL) {
+    unsigned long rxId;
+    byte len;
+    byte buf[8];
+    CAN0.readMsgBuf(&rxId, &len, buf);
+
+    if (rxId == FILTRO_ID && len >= 1) {
+      posicionObjetivo = buf[0];
+      enviarFeedbackCAN();
+    }
+  }
+  moverActuadorHaciaObjetivo();
+}

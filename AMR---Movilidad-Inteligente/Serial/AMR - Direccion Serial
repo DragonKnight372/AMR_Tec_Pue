@@ -1,0 +1,163 @@
+/*
+
+	Codigo Direccion
+	YRA - Machinime - Peter - Ivan - AMH19
+
+EL formato "correcto" para la comunicacion de mensajes
+se sugiere como "200 85" o "200_85" donde "200" sera
+el ID para el freno (puede cambiar) y "85" debera indicar
+el giro del engranaje.
+
+Cuando se envia "ID valor" ("200 40") si el valor es
+menor a 51% gira a la izquierda; si el valor es mayor
+a 51% gira a la derecha.
+
+	NO ESTA FUNCIONANDO EL FINAL DE CARRERA DE LA LLANTA DERECHA
+
+*/
+
+// -- Librerias --
+#include <SPI.h>
+#include <mcp_can.h> // -- coryjfowler/mcp_can@^1.5.1
+
+// -- PINOUT --
+// Se utiliza un Pro Micro
+#define PIN_PWM 9
+#define PIN_DIR 7
+#define PIN_FEEDBACK A7 // Se utiliza un Pro Micro
+
+// -- Calibracion feedback --
+const int RAW_MIN = 412; // -- Para evitar el final de carrera (No sirve)
+const int RAW_MAX = 826; // -- Para evitar el final de carrera
+
+// --  Inicializacion variables de control --
+byte posicionObjetivo;
+const int TOLERANCIA = 1; // Para evitar oscilaciones
+
+// --  Inicializacion variables del filtro de media movil --
+const int N = 6;   	// Heuristico
+int bufferLecturas[N];
+long sumaLecturas = 0;
+int indice = 0;
+bool bufferLleno = false;
+
+// -- Funciones --
+// =============================================================
+
+// Esta funcion: Regresa un filtro movil de la lecturas de Voltaje
+int leerPotFiltrado() {
+  int nueva = analogRead(PIN_FEEDBACK);
+
+  sumaLecturas -= bufferLecturas[indice];
+  bufferLecturas[indice] = nueva;
+  sumaLecturas += nueva;
+  indice++;
+  if (indice >= N) { indice = 0; bufferLleno = true; }
+
+  return bufferLleno ? (sumaLecturas / N) : (sumaLecturas / indice);
+}
+// =============================================================
+
+// Esta funcion: Regresa la lectura del voltaje en porcentaje
+byte lecturaToPorcentaje(int lecturaRaw) {
+  lecturaRaw = constrain(lecturaRaw, RAW_MIN, RAW_MAX);
+  int porcentaje = map(lecturaRaw, RAW_MIN, RAW_MAX, 0, 100);
+  return (byte)constrain(porcentaje, 0, 100);
+}
+// =============================================================
+
+// Esta funcion: Obtiene lo que tiene el serial y lo convierte a un Objetivo 
+// de la posicion de giro.
+void actualizar(String s) {
+  s.trim();
+  s.replace("_", " ");  // por si el usuario pone guion
+
+  int sep = s.indexOf(' ');
+  if (sep == -1) {
+    Serial.println("Error: formato incorrecto. Usa ID_Porcentaje (ej: 200_85)");
+    return;
+  }
+
+  String dato1 = s.substring(0, sep);     // hexadecimal (no usado)
+  String dato2 = s.substring(sep + 1);    // decimal (0–100)
+
+  int nuevoObjetivo = dato2.toInt();      // se interpreta como decimal
+  nuevoObjetivo = constrain(nuevoObjetivo, 0, 100);
+  posicionObjetivo = (byte)nuevoObjetivo;
+
+  Serial.print("Nuevo objetivo establecido a: ");
+  Serial.print(posicionObjetivo);
+  Serial.println("%");
+}
+// =============================================================
+
+// Esta Funcion: Lleva al angulo actual al objetivo.
+void moverActuadorHaciaObjetivo() {
+  byte posicionActual = lecturaToPorcentaje(leerPotFiltrado());
+  int error = posicionObjetivo - posicionActual;
+
+  if (abs(error) <= TOLERANCIA) {
+    analogWrite(PIN_PWM, 0);
+    return;
+  }
+
+  digitalWrite(PIN_DIR, error > 0 ? LOW : HIGH);
+  byte pwmValor = map(abs(error), 0, 100, 135, 195);
+  pwmValor = constrain(pwmValor, 0, 255);
+  analogWrite(PIN_PWM, pwmValor);
+}
+// =============================================================
+
+// -- Base --
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+
+  pinMode(PIN_PWM, OUTPUT);
+  pinMode(PIN_DIR, OUTPUT);
+  analogWrite(PIN_PWM, 0);
+  digitalWrite(PIN_DIR, LOW);
+
+  for (int i = 0; i < N; i++) {
+    bufferLecturas[i] = analogRead(PIN_FEEDBACK);
+    sumaLecturas += bufferLecturas[i];
+  }
+  bufferLleno = true;
+
+  byte posicionInicial = lecturaToPorcentaje(leerPotFiltrado());
+  posicionObjetivo = posicionInicial;
+
+  Serial.print("Posicion inicial: ");
+  Serial.print(posicionInicial);
+  Serial.println("%");
+}
+
+void loop() {
+  if (Serial.available()) {
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+    if (input.length() > 0) {
+      actualizar(input);
+    }
+  }
+  moverActuadorHaciaObjetivo();
+
+  static unsigned long lastPrint = 0;	// Contador de tiempo
+  if (millis() - lastPrint > 250) {
+    lastPrint = millis();   // Cada 250 ms 
+
+    int lectura = leerPotFiltrado();
+    byte porcentaje = lecturaToPorcentaje(lectura);
+
+    // Convertir a voltaje (Arduino de 10 bits y 5V referencia)
+    float voltaje = (lectura * 5.0) / 1023.0;
+
+    Serial.print("Angulo de direccion actual: ");
+    Serial.print(porcentaje);
+    Serial.print("%  |  Lectura: ");
+    Serial.print(lectura);
+    Serial.print("  |  Voltaje: ");
+    Serial.print(voltaje, 2);
+    Serial.println(" V");
+  }
+}

@@ -1,0 +1,196 @@
+/*
+  Codigo Tren Motriz (versión CAN con retroalimentación)
+  YRA - Machinime
+
+  Comunicación por BUS CAN:
+  - ID 0x300: Potencia (0–100%)
+  - ID 0x310: Relé (0 = apagado, 1 = encendido)
+  - ID 0x320: Dirección (0 = reversa, 1 = adelante)
+  - ID 0x301: Feedback de potencia
+  - ID 0x311: Feedback de relé
+  - ID 0x321: Feedback de dirección
+  - ID 0x210: Paro Emergencia
+
+  PWM:
+  - 0% = 0
+  - 100% = 180
+*/
+
+#include <Arduino.h>
+#include <SPI.h>
+#include <mcp_can.h>
+
+// ===== Pines MCP2515 (ESP32 VSPI) =====
+#define CAN_CS   5
+#define CAN_SCK  18
+#define CAN_MISO 19
+#define CAN_MOSI 23
+
+// ===== Configuración CAN =====
+#define CAN_SPEED CAN_500KBPS
+#define CAN_CLOCK MCP_8MHZ
+
+#define ID_CMD_PWM   0x300   // Potencia motor
+#define ID_CMD_RELE  0x310   // Encendido/apagado motor
+#define ID_CMD_DIR   0x320   // Dirección motor
+#define ID_FB_PWM    0x301   // Retroalimentación de potencia
+#define ID_FB_RELE   0x311   // Retroalimentación de relé
+#define ID_FB_DIR    0x321   // Retroalimentación de dirección
+
+#define ID_PARO_EMERGENCIA 0x210
+
+MCP_CAN CAN0(CAN_CS);
+
+// ===== Pines del tren motriz =====
+const int pwmPin  = 12;
+const int relayPin = 17;
+const int dirPin   = 25;
+const int spl1Pin  = 32;
+const int spl2Pin  = 33;
+
+// ===== Variables =====
+int velocidad = 0;         // 0–100 %
+int pwmValue = 0;
+bool relayState = false;
+bool direccion = true;     // true = adelante, false = reversa
+const int rampDelay = 10;
+const int pwmMin = 0;
+const int pwmMax = 180;
+
+bool paroEmergenciaActivo = false;
+
+// ===== Configuración PWM =====
+const int freq = 1000;
+const int pwmChannel = 0;
+const int resolution = 8;
+
+// =====================================================
+// Enviar mensaje CAN genérico
+// =====================================================
+void enviarMensajeCAN(uint16_t id, uint8_t valor) {
+  valor = constrain(valor, 0, 100);
+  byte data[1] = {valor};
+  CAN0.sendMsgBuf(id, 0, 1, data);
+}
+
+// =====================================================
+// Leer comandos CAN
+// =====================================================
+void leerMensajesCAN() {
+  unsigned long rxId;
+  uint8_t len = 0;
+  uint8_t buf[8];
+  uint8_t ext = 0;
+
+  if (CAN0.checkReceive() != CAN_MSGAVAIL) return;
+  if (CAN0.readMsgBuf(&rxId, &ext, &len, buf) != CAN_OK) return;
+  if (len < 1) return;
+
+  uint8_t valor = buf[0];
+  
+  // Paro de emergencia
+  if (rxId == ID_PARO_EMERGENCIA) {
+    if (valor == 1) activarParoEmergencia();
+    else if (valor == 0) 
+    paroEmergenciaActivo = false;;
+    return; // No seguir procesando más si es mensaje de paro
+  }
+
+  // Si el paro está activo, ignorar otros comandos
+  if (paroEmergenciaActivo) return;
+
+
+  if (rxId == ID_CMD_PWM) {
+    valor = constrain(valor, 0, 100);
+    velocidad = valor;
+    enviarMensajeCAN(ID_FB_PWM, velocidad);
+  }
+
+  else if (rxId == ID_CMD_RELE) {
+    relayState = (valor > 0);
+    digitalWrite(relayPin, relayState ? HIGH : LOW);
+    enviarMensajeCAN(ID_FB_RELE, relayState);
+  }
+
+  else if (rxId == ID_CMD_DIR) {
+    direccion = (valor > 0);
+    digitalWrite(dirPin, direccion ? HIGH : LOW);
+    enviarMensajeCAN(ID_FB_DIR, direccion);
+  }
+}
+
+// =====================================================
+// Función para realizar rampa de PWM
+// =====================================================
+void rampaPWM(int objetivo) {
+  objetivo = constrain(objetivo, 0, 255);
+  pwmValue = objetivo;
+  ledcWrite(pwmChannel, pwmValue);
+}
+
+// =====================================================
+
+// =====================================================
+// Función para Paro de Emergencia
+// =====================================================
+void activarParoEmergencia() {
+  paroEmergenciaActivo = true;
+  velocidad = 0;
+  pwmValue = 0;
+  relayState = false;
+
+  ledcWrite(pwmChannel, 0);       // Apagar PWM
+  enviarMensajeCAN(ID_FB_PWM, 0);
+  
+  digitalWrite(relayPin, LOW);    // Apagar relé
+  enviarMensajeCAN(ID_FB_RELE, 0);
+  
+}
+
+// =====================================================
+
+void setup() {
+  pinMode(pwmPin, OUTPUT);
+  pinMode(relayPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
+  pinMode(spl1Pin, OUTPUT);
+  pinMode(spl2Pin, OUTPUT);
+
+  ledcSetup(pwmChannel, freq, resolution);
+  ledcAttachPin(pwmPin, pwmChannel);
+
+  digitalWrite(spl1Pin, HIGH);
+  digitalWrite(spl2Pin, LOW);
+  digitalWrite(relayPin, LOW);
+  digitalWrite(dirPin, LOW);
+
+  // ===== CAN setup =====
+  SPI.begin(CAN_SCK, CAN_MISO, CAN_MOSI, CAN_CS);
+  delay(100);
+
+  if (CAN0.begin(MCP_ANY, CAN_SPEED, CAN_CLOCK) != CAN_OK) {
+    while (1) delay(1000);
+  }
+
+  CAN0.init_Mask(0, 0, 0x7F0);
+  CAN0.init_Filt(0, 0, 0x300); // Potencia
+  CAN0.init_Filt(1, 0, 0x310); // Relé
+  CAN0.init_Mask(1, 0, 0x7F0);
+  CAN0.init_Filt(2, 0, 0x320); // Dirección
+  CAN0.init_Filt(3, 0, 0x210);
+  CAN0.init_Filt(4, 0, 0x000);
+  CAN0.init_Filt(5, 0, 0x000);
+
+  CAN0.setMode(MCP_NORMAL);
+}
+
+// =====================================================
+void loop() {
+  leerMensajesCAN();
+
+  // Control de potencia (0–100 %)
+  int objetivo = map(velocidad, 0, 100, pwmMin, pwmMax);
+  rampaPWM(objetivo);
+
+  delay(50);
+}
