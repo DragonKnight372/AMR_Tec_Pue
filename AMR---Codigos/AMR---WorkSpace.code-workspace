@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"name": "AMR---Codigos",
+			"path": "."
+		},
+		{
+			"name": "AMR---Movilidad-Inteligente",
+			"path": "../AMR---Movilidad-Inteligente"
+		},
+		{
+			"name": "smart_mobility_2025",
+			"path": "../smart_mobility_2025"
+		}
+	],
+	"settings": {}
+}
