@@ -1,0 +1,9 @@
+uint32 pulses 0
+float64 distance 0.0
+float64 velocity 0.0
+float64 acceleration_x 0.0
+float64 acceleration_y 0.0
+float64 acceleration_z 0.0
+float64 roll 0.0
+float64 pitch 0.0
+float64 yaw 0.0

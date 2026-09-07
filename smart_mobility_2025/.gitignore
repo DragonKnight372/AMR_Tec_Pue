@@ -1,0 +1,20 @@
+# === ROS2 build directories ===
+build/
+install/
+log/
+
+# === Python cache ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# === Editor / IDE ===
+.vscode/
+.idea/
+
+# === Misc ===
+*.swp
+*.swo
+*.bak
+.DS_Store
