@@ -39,7 +39,7 @@
 //   Nota: la escala es invertida (más ADC = más extendido = menos %)
 // ================================================================
 const int RAW_MIN = 830;   // <-- ACTUALIZAR si cambia el límite retraído 830
-const int RAW_MAX = 895;   // <-- ACTUALIZAR si cambia el límite extendido
+const int RAW_MAX = 900;   // <-- ACTUALIZAR si cambia el límite extendido 926 it's the maximum value of the feedback potentiometer (emergency brake fully applied, 926, but it overwhelms the actuator)
 
 // ================================================================
 //   HARDWARE (no modificar)
