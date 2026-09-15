@@ -29,7 +29,7 @@
  *
  *   Mapeo v2.7 (igual que v2.6.6):
  *     RAW_MIN(815) →   0% = sin freno   (actuador retraído)
- *     RAW_MAX(868) → 100% = freno total (actuador extendido)
+ *     RAW_MAX(926) → 100% = freno total (actuador extendido)
  *
  *   PINOUT nuevo:
  *     D4 → Relé estroboscópico (HIGH = freno máximo activo)
@@ -38,6 +38,8 @@
  *     RX 0x200 → freno proporcional (0-100%)
  *     RX 0x210 → emergencia
  *     TX 0x201 → feedback posición (0-100%)
+ * 
+ *    v2.8 - Control proporcional y reducción de las osciaciones del actuador.
  * ================================================================
  */
 
@@ -70,7 +72,7 @@ bool canOK = false;
 
 // ── Límites físicos RAW ────────────────────────────────────────
 const int RAW_MIN = 830;   // retraído  = sin freno    =   0%
-const int RAW_MAX = 900;   // extendido = freno total  = 100%
+const int RAW_MAX = 926;   // extendido = freno total  = 100%
 
 // ── Posiciones en % ───────────────────────────────────────────
 #define POS_NORMAL        0  // % — sin freno
@@ -81,7 +83,7 @@ const int RAW_MAX = 900;   // extendido = freno total  = 100%
 const byte UMBRAL_RELE = 90;   // % — ajustable
 
 // ── Control ────────────────────────────────────────────────────
-const int  TOLERANCIA              = 8;
+const int  TOLERANCIA              = 10;
 const unsigned long TIMEOUT_FUERA_RANGO_MS = 2000;
 
 // ── Watchdog ──────────────────────────────────────────────────
@@ -233,9 +235,13 @@ void moverActuadorHaciaObjetivo() {
     return;
   }
 
+  // El PWM minimo crece linealmente con la posicion actual.
+  // En 0% de compresion necesita menos fuerza (130), en 100% necesita mas (220).
+  byte pwmMinimo = map(posicionActual, 0, 100, 130, 220);
+
   byte pwmValor = (byte)constrain(
-    map(abs(error), TOLERANCIA, 100, 140, 255),
-    140, 255);
+    map(abs(error), TOLERANCIA, 100, pwmMinimo, 255),
+    pwmMinimo, 255);
 
   if (error > 0) {
     digitalWrite(PIN_DIR, LOW);  ultimaDireccion = 1;
@@ -469,5 +475,27 @@ void loop() {
   if (now - lastOLED >= 100) {
     lastOLED = now;
     if (displayOK) updateOLED();
+  }
+
+  // Puro serial, 
+  static unsigned long lastSerial = 0;
+  if (now - lastSerial >= 100) { // Imprime cada 100 ms (10 veces por segundo)
+    lastSerial = now;
+    
+    int lecturaRaw = leerPotFiltrado();
+    byte posActual = lecturaToPorcentaje(lecturaRaw);
+
+    // Formato compatible con el Serial Plotter de Arduino
+    Serial.print("Objetivo(%):"); 
+    Serial.print(posicionObjetivo);
+    Serial.print(" Actual(%):"); 
+    Serial.print(posActual);
+    Serial.print(" RAW_Actual:"); 
+    Serial.print(lecturaRaw);
+    
+    // Si quieres ver el PWM que se está aplicando en ese instante, descomenta la siguiente línea:
+    // Serial.print(" PWM:"); Serial.print(ultimoPWM);
+    
+    Serial.println(); // Salto de línea obligatorio al final
   }
 }
